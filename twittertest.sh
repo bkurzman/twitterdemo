@@ -11,6 +11,16 @@ installUtils () {
 
 }
 
+instalHDFManagementPack () {
+	wget http://public-repo-1.hortonworks.com/HDF/centos7/3.x/updates/3.0.1.1/tars/hdf_ambari_mp/hdf-ambari-mpack-3.0.1.1-5.tar.gz
+ambari-server install-mpack --mpack=hdf-ambari-mpack-3.0.1.1-5.tar.gz --verbose
+
+	sleep 2
+	ambari-server restart
+	waitForAmbari
+	sleep 2
+}
+
 installNifi() {
 	#change this to management packs code
 
@@ -203,16 +213,134 @@ handleGroupPorts (){
        	done
 }
 
+installNifiService () {
+       	echo "*********************************Creating NIFI service..."
+       	# Create NIFI service
+       	curl -u admin:admin -H "X-Requested-By:ambari" -i -X POST http://$AMBARI_HOST:8080/api/v1/clusters/$CLUSTER_NAME/services/NIFI
+
+       	sleep 2
+       	echo "*********************************Adding NIFI MASTER component..."
+       	# Add NIFI Master component to service
+       	curl -u admin:admin -H "X-Requested-By:ambari" -i -X POST http://$AMBARI_HOST:8080/api/v1/clusters/$CLUSTER_NAME/services/NIFI/components/NIFI_MASTER
+		curl -u admin:admin -H "X-Requested-By:ambari" -i -X POST http://$AMBARI_HOST:8080/api/v1/clusters/$CLUSTER_NAME/services/NIFI/components/NIFI_CA
+		
+       	sleep 2
+       	echo "*********************************Creating NIFI configuration..."
+
+       	# Create and apply configuration
+		/var/lib/ambari-server/resources/scripts/configs.sh set $AMBARI_HOST $CLUSTER_NAME nifi-ambari-config $ROOT_PATH/Twitter/hdf-config/nifi-config/nifi-ambari-config.json
+
+		/var/lib/ambari-server/resources/scripts/configs.sh set $AMBARI_HOST $CLUSTER_NAME nifi-ambari-ssl-config $ROOT_PATH/Twitter/hdf-config/nifi-config/nifi-ambari-ssl-config.json
+
+		/var/lib/ambari-server/resources/scripts/configs.sh set $AMBARI_HOST $CLUSTER_NAME nifi-authorizers-env $ROOT_PATH/Twitter/hdf-config/nifi-config/nifi-authorizers-env.json
+
+		/var/lib/ambari-server/resources/scripts/configs.sh set $AMBARI_HOST $CLUSTER_NAME nifi-bootstrap-env $ROOT_PATH/Twitter/hdf-config/nifi-config/nifi-bootstrap-env.json
+
+		/var/lib/ambari-server/resources/scripts/configs.sh set $AMBARI_HOST $CLUSTER_NAME nifi-bootstrap-notification-services-env $ROOT_PATH/Twitter/hdf-config/nifi-config/nifi-bootstrap-notification-services-env.json
+
+		/var/lib/ambari-server/resources/scripts/configs.sh set $AMBARI_HOST $CLUSTER_NAME nifi-env $ROOT_PATH/Twitter/hdf-config/nifi-config/nifi-env.json
+
+		/var/lib/ambari-server/resources/scripts/configs.sh set $AMBARI_HOST $CLUSTER_NAME nifi-flow-env $ROOT_PATH/Twitter/hdf-config/nifi-config/nifi-flow-env.json
+
+		/var/lib/ambari-server/resources/scripts/configs.sh set $AMBARI_HOST $CLUSTER_NAME nifi-login-identity-providers-env $ROOT_PATH/Twitter/hdf-config/nifi-config/nifi-login-identity-providers-env.json
+
+		/var/lib/ambari-server/resources/scripts/configs.sh set $AMBARI_HOST $CLUSTER_NAME nifi-node-logback-env $ROOT_PATH/Twitter/hdf-config/nifi-config/nifi-node-logback-env.json
+
+		/var/lib/ambari-server/resources/scripts/configs.sh set $AMBARI_HOST $CLUSTER_NAME nifi-properties $ROOT_PATH/Twitter/hdf-config/nifi-config/nifi-properties.json
+
+		/var/lib/ambari-server/resources/scripts/configs.sh set $AMBARI_HOST $CLUSTER_NAME nifi-state-management-env $ROOT_PATH/Twitter/hdf-config/nifi-config/nifi-state-management-env.json
+		
+		/var/lib/ambari-server/resources/scripts/configs.sh set $AMBARI_HOST $CLUSTER_NAME nifi-jaas-conf $ROOT_PATH/Twitter/hdf-config/nifi-config/nifi-jaas-conf.json
+				
+		/var/lib/ambari-server/resources/scripts/configs.sh set $AMBARI_HOST $CLUSTER_NAME nifi-logsearch-conf $ROOT_PATH/CloudBreakArtifacts/hdf-config/nifi-config/nifi-logsearch-conf.json
+		
+       	echo "*********************************Adding NIFI MASTER role to Host..."
+       	# Add NIFI Master role to Ambari Host
+       	curl -u admin:admin -H "X-Requested-By:ambari" -i -X POST http://$AMBARI_HOST:8080/api/v1/clusters/$CLUSTER_NAME/hosts/$AMBARI_HOST/host_components/NIFI_MASTER
+
+       	echo "*********************************Adding NIFI CA role to Host..."
+		# Add NIFI CA role to Ambari Host
+       	curl -u admin:admin -H "X-Requested-By:ambari" -i -X POST http://$AMBARI_HOST:8080/api/v1/clusters/$CLUSTER_NAME/hosts/$AMBARI_HOST/host_components/NIFI_CA
+
+       	sleep 30
+       	echo "*********************************Installing NIFI Service"
+       	# Install NIFI Service
+       	TASKID=$(curl -u admin:admin -H "X-Requested-By:ambari" -i -X PUT -d '{"RequestInfo": {"context" :"Install Nifi"}, "Body": {"ServiceInfo": {"maintenance_state" : "OFF", "state": "INSTALLED"}}}' http://$AMBARI_HOST:8080/api/v1/clusters/$CLUSTER_NAME/services/NIFI | grep "id" | grep -Po '([0-9]+)')
+		
+		sleep 2       	
+       	if [ -z $TASKID ]; then
+       		until ! [ -z $TASKID ]; do
+       			TASKID=$(curl -u admin:admin -H "X-Requested-By:ambari" -i -X PUT -d '{"RequestInfo": {"context" :"Install Nifi"}, "Body": {"ServiceInfo": {"maintenance_state" : "OFF", "state": "INSTALLED"}}}' http://$AMBARI_HOST:8080/api/v1/clusters/$CLUSTER_NAME/services/NIFI | grep "id" | grep -Po '([0-9]+)')
+       		 	echo "*********************************AMBARI TaskID " $TASKID
+       		done
+       	fi
+       	
+       	echo "*********************************AMBARI TaskID " $TASKID
+       	sleep 2
+       	LOOPESCAPE="false"
+       	until [ "$LOOPESCAPE" == true ]; do
+               	TASKSTATUS=$(curl -u admin:admin -X GET http://$AMBARI_HOST:8080/api/v1/clusters/$CLUSTER_NAME/requests/$TASKID | grep "request_status" | grep -Po '([A-Z]+)')
+               	if [ "$TASKSTATUS" == COMPLETED ]; then
+                       	LOOPESCAPE="true"
+               	fi
+               	echo "*********************************Task Status" $TASKSTATUS
+               	sleep 2
+       	done
+}
+
+
+waitForNifiServlet () {
+       	LOOPESCAPE="false"
+       	until [ "$LOOPESCAPE" == true ]; do
+       		TASKSTATUS=$(curl -u admin:admin -i -X GET http://$AMBARI_HOST:9090/nifi-api/controller | grep -Po 'OK')
+       		if [ "$TASKSTATUS" == OK ]; then
+               		LOOPESCAPE="true"
+       		else
+               		TASKSTATUS="PENDING"
+       		fi
+       		echo "*********************************Waiting for NIFI Servlet..."
+       		echo "*********************************NIFI Servlet Status... " $TASKSTATUS
+       		sleep 2
+       	done
+}
+
 export AMBARI_HOST=$(hostname -f)
 echo "*********************************AMABRI HOST IS: $AMBARI_HOST"
 
 export ROOT_PATH=~
 echo "*********************************ROOT PATH IS: $ROOT_PATH"
 
+export VERSION=`hdp-select status hadoop-client | sed 's/hadoop-client - \([0-9]\.[0-9]\).*/\1/'`
+export INTVERSION=$(echo $VERSION*10 | bc | grep -Po '([0-9][0-9])')
+echo "*********************************HDP VERSION IS: $VERSION"
+
 echo "****************Installing Utilities"
 installUtils
-echo "****************Installing Nifi"
-installNifi
+echo "*********************************Install HDF Management Pack..."
+instalHDFManagementPack 
+
+sleep 2
+installNifiService
+
+sleep 2
+NIFI_STATUS=$(getServiceStatus NIFI)
+echo "*********************************Checking NIFI status..."
+if ! [[ $NIFI_STATUS == STARTED || $NIFI_STATUS == INSTALLED ]]; then
+       	echo "*********************************NIFI is in a transitional state, waiting..."
+       	waitForService NIFI
+       	echo "*********************************NIFI has entered a ready state..."
+fi
+
+sleep 2
+
+if [[ $NIFI_STATUS == INSTALLED ]]; then
+       	startServiceAndComplete NIFI
+else
+       	echo "*********************************NIFI Service Started..."
+fi
+
+sleep 2
+
 echo "****************Installing Solr"
 installSolr
 echo "****************Initializing Solr"
